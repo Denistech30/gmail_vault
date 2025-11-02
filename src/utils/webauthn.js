@@ -2,10 +2,11 @@ import { startRegistration, startAuthentication } from '@simplewebauthn/browser'
 
 export async function enrollFingerprint() {
   try {
+    const challenge = crypto.getRandomValues(new Uint8Array(32));
     const resp = await startRegistration({
       rp: { name: 'Gmail Vault', id: window.location.hostname },
       user: { id: crypto.randomUUID(), name: 'user', displayName: 'User' },
-      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      challenge: challenge.buffer,
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
       authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
       attestation: 'direct'
@@ -19,8 +20,9 @@ export async function enrollFingerprint() {
 
 export async function authenticateFingerprint() {
   try {
+    const challenge = crypto.getRandomValues(new Uint8Array(32));
     const resp = await startAuthentication({
-      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      challenge: challenge.buffer,
       rpId: window.location.hostname,
       allowCredentials: [],
       userVerification: 'required'
