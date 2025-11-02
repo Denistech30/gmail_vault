@@ -14,8 +14,33 @@ const randomBase64URL = (length = 32) => {
   return bufferToBase64URL(randomBytes);
 };
 
+const ensureSecureContext = () => {
+  if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
+    throw new Error('WebAuthn requires HTTPS. Open this app over https://');
+  }
+};
+
+export const ensurePlatformAuthenticatorAvailable = async () => {
+  ensureSecureContext();
+
+  if (!window.PublicKeyCredential) {
+    throw new Error('WebAuthn is not supported in this browser.');
+  }
+
+  if (typeof window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable !== 'function') {
+    throw new Error('Platform authenticator check is unavailable in this browser.');
+  }
+
+  const available = await window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+  if (!available) {
+    throw new Error('No enrolled biometric authenticator found on this device.');
+  }
+};
+
 export async function enrollFingerprint() {
   try {
+    await ensurePlatformAuthenticatorAvailable();
+
     const challenge = randomBase64URL(32);
     const userId = bufferToBase64URL(new TextEncoder().encode(crypto.randomUUID()));
 
@@ -47,6 +72,8 @@ export async function enrollFingerprint() {
 
 export async function authenticateFingerprint() {
   try {
+    await ensurePlatformAuthenticatorAvailable();
+
     const challenge = randomBase64URL(32);
 
     const resp = await startAuthentication({
