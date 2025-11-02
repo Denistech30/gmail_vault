@@ -37,24 +37,19 @@ export default function Settings({ darkMode, toggleDarkMode }) {
     }
 
     try {
-      // Step 1: Get WebAuthn credential
       const cred = await enrollFingerprint();
       localStorage.setItem("fingerprintCred", JSON.stringify(cred));
       
-      // Step 2: Create ZKP hash and store it
       const publicHashField = await hashCredential(cred);
       const publicHash = publicHashField.toString();
       localStorage.setItem("zkpPublicHash", publicHash);
       
-      // Save ZKP hash to Firestore
       await addDoc(collection(db, "users", user.uid, "zkp"), { publicHash });
       
-      // Step 3: Split credential into shards
       const { shard1, shard2 } = splitIntoShards(cred);
       const key = CryptoJS.lib.WordArray.random(32).toString();
       localStorage.setItem("shardKey", key);
 
-      // Step 4: Save encrypted shards to Firestore
       await addDoc(collection(db, "users", user.uid, "shards"), {
         shard: encryptShard(shard1, key),
         index: 0
@@ -64,17 +59,13 @@ export default function Settings({ darkMode, toggleDarkMode }) {
         index: 1
       });
       
-      // Step 5: Enable biometrics
       setBiometricsEnabled(true);
       localStorage.setItem("biometricsEnabled", "true");
       
-      alert("✅ Enrollment complete!\n\n" +
-            "✓ Fingerprint enrolled\n" +
-            "✓ ZKP hash saved\n" +
-            "✓ Shards saved to cloud");
+      alert("Enrollment complete!\n\nFingerprint enrolled\nZKP hash saved\nShards saved to cloud");
     } catch (err) {
       console.error("Enrollment error:", err);
-      alert("❌ Enrollment failed: " + err.message + "\n\nPlease try again.");
+      alert("Enrollment failed: " + (err.message || "Unknown error") + "\n\nCheck console for details.");
     }
   };
 

@@ -2,34 +2,49 @@ import { startRegistration, startAuthentication } from '@simplewebauthn/browser'
 
 export async function enrollFingerprint() {
   try {
-    const challenge = crypto.getRandomValues(new Uint8Array(32));
+    const challenge = crypto.getRandomValues(new Uint8Array(32)).buffer;
+
     const resp = await startRegistration({
       rp: { name: 'Gmail Vault', id: window.location.hostname },
-      user: { id: crypto.randomUUID(), name: 'user', displayName: 'User' },
-      challenge: challenge.buffer,
-      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
-      authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
-      attestation: 'direct'
+      user: {
+        id: new TextEncoder().encode(crypto.randomUUID()),
+        name: 'user@gmail.com',
+        displayName: 'Gmail Vault User',
+      },
+      challenge,
+      pubKeyCredParams: [
+        { type: 'public-key', alg: -7 },
+        { type: 'public-key', alg: -257 },
+      ],
+      authenticatorSelection: {
+        residentKey: 'required',
+        userVerification: 'required',
+      },
+      timeout: 60000,
     });
-    return resp; // This is the raw credential
+
+    return resp;
   } catch (err) {
     console.error('Enrollment failed:', err);
-    throw err;
+    throw new Error('Biometrics not supported. Use HTTPS and a secure device.');
   }
 }
 
 export async function authenticateFingerprint() {
   try {
-    const challenge = crypto.getRandomValues(new Uint8Array(32));
+    const challenge = crypto.getRandomValues(new Uint8Array(32)).buffer;
+
     const resp = await startAuthentication({
-      challenge: challenge.buffer,
+      challenge,
       rpId: window.location.hostname,
       allowCredentials: [],
-      userVerification: 'required'
+      userVerification: 'required',
+      timeout: 60000,
     });
+
     return resp;
   } catch (err) {
-    console.error('Auth failed:', err);
-    throw err;
+    console.error('Authentication failed:', err);
+    throw new Error('Fingerprint scan failed. Try again.');
   }
 }
