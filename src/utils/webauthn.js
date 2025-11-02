@@ -45,26 +45,24 @@ export async function enrollFingerprint() {
     const userId = bufferToBase64URL(new TextEncoder().encode(crypto.randomUUID()));
 
     const resp = await startRegistration({
-      publicKey: {
-        rp: { name: 'Gmail Vault', id: window.location.hostname },
-        user: {
-          id: userId,
-          name: 'user@gmail.com',
-          displayName: 'Gmail Vault User',
-        },
-        challenge,
-        pubKeyCredParams: [
-          { type: 'public-key', alg: -7 }, // ES256
-          { type: 'public-key', alg: -257 }, // RS256
-        ],
-        authenticatorSelection: {
-          residentKey: 'required',
-          userVerification: 'required',
-          authenticatorAttachment: 'platform',
-        },
-        timeout: 60000,
-        attestation: 'none',
+      rp: { name: 'Gmail Vault', id: window.location.hostname },
+      user: {
+        id: userId,
+        name: 'user@gmail.com',
+        displayName: 'Gmail Vault User',
       },
+      challenge,
+      pubKeyCredParams: [
+        { type: 'public-key', alg: -7 }, // ES256
+        { type: 'public-key', alg: -257 }, // RS256
+      ],
+      authenticatorSelection: {
+        residentKey: 'required',
+        userVerification: 'required',
+        authenticatorAttachment: 'platform',
+      },
+      timeout: 60000,
+      attestation: 'none',
     });
 
     return resp;
@@ -81,13 +79,11 @@ export async function authenticateFingerprint() {
     const challenge = randomBase64URL(32);
 
     const resp = await startAuthentication({
-      publicKey: {
-        challenge,
-        rpId: window.location.hostname,
-        allowCredentials: [],
-        userVerification: 'required',
-        timeout: 60000,
-      },
+      challenge,
+      rpId: window.location.hostname,
+      allowCredentials: [],
+      userVerification: 'required',
+      timeout: 60000,
     });
 
     return resp;
