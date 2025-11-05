@@ -54,7 +54,7 @@ export default function Dashboard() {
             snapshot.docs.map(async (docSnapshot) => {
               const data = docSnapshot.data()
               try {
-                const plain = await decryptData(data.encryptedData, user.uid)
+                const plain = await decryptData(data.encryptedData)
                 
                 console.log('✅ Decrypted account:', {
                   id: docSnapshot.id,

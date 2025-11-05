@@ -1,11 +1,14 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { collection, getDocs } from "firebase/firestore";
-import { db } from "../firebase/config";
+import { collection, doc, getDoc, getDocs } from "firebase/firestore";
+import { auth, db } from "../firebase/config";
 import { authenticateFingerprint } from "../utils/webauthn";
 import { hashCredential } from "../utils/zkp";
 import { decryptData } from "../utils/decrypt";
+import { sendSignInLinkToEmail } from "firebase/auth";
 import { useAuth } from "../contexts/AuthContext";
+import CryptoJS from "crypto-js";
+import { setMasterKey } from "../utils/masterKey";
 
 export default function Recovery() {
   const { user } = useAuth();
@@ -24,8 +27,8 @@ export default function Recovery() {
       const zkpSnap = await getDocs(collection(db, "users", user.uid, "zkp"));
       const storedHash = zkpSnap.docs[0]?.data()?.publicHash;
 
-      if (!storedHash) {
-        throw new Error("No ZKP hash found. Enroll biometrics first.");
+      if (!storedHash || !localHash) {
+        throw new Error("ZKP hash missing");
       }
 
       const currentHashField = await hashCredential(authResp);
@@ -42,7 +45,7 @@ export default function Recovery() {
       const accounts = await Promise.all(
         accSnap.docs.map(async doc => {
           const data = doc.data();
-          const plain = await decryptData(data.encryptedData, user.uid);
+          const plain = await decryptData(data.encryptedData);
           return { id: doc.id, ...plain };
         })
       );
@@ -54,6 +57,52 @@ export default function Recovery() {
     } catch (err) {
       setStatus("error");
       console.error('Recovery error:', err);
+
+      if (err.message?.includes('ZKP')) {
+        const email = prompt("Fingerprint check failed. Enter email to receive a verification link.");
+        if (!email) {
+          const phrase = prompt("No email provided. Enter recovery phrase.");
+          if (!phrase) {
+            alert("Recovery cancelled. Email or phrase required.");
+            return;
+          }
+
+          try {
+            const backupKey = CryptoJS.PBKDF2(phrase, user.uid, { keySize: 8, iterations: 1000 }).toString();
+            const backupDoc = await getDoc(doc(db, "users", user.uid));
+            const encryptedBackup = backupDoc.data()?.encryptedBackup;
+            if (!encryptedBackup) {
+              throw new Error("No backup found for this user.");
+            }
+
+            const decryptedBytes = CryptoJS.AES.decrypt(encryptedBackup, backupKey);
+            const masterKey = decryptedBytes.toString(CryptoJS.enc.Utf8);
+            if (!masterKey) {
+              throw new Error("Invalid recovery phrase.");
+            }
+
+            setMasterKey(masterKey);
+            alert("Recovery phrase accepted. Retry fingerprint to restore vault.");
+            return;
+          } catch (phraseErr) {
+            console.error('Phrase recovery error:', phraseErr);
+            alert("Recovery phrase failed: " + phraseErr.message);
+            return;
+          }
+        }
+
+        try {
+          await sendSignInLinkToEmail(auth, email, {
+            url: window.location.href,
+            handleCodeInApp: true,
+          });
+          alert("Check your email for a verification link.");
+        } catch (linkErr) {
+          console.error('Email link error:', linkErr);
+          alert("Failed to send email link: " + linkErr.message);
+        }
+      }
+
       alert("Recovery failed: " + err.message + "\n\n" +
         "Tip: Ensure device has screen lock and biometrics enabled.");
     }

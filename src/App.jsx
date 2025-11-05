@@ -2,6 +2,7 @@
 
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom"
 import { useState, useEffect } from "react"
+import { isSignInWithEmailLink, signInWithEmailLink } from "firebase/auth"
 import { AuthProvider, useAuth } from "./contexts/AuthContext"
 import Dashboard from "./pages/Dashboard"
 import AddAccount from "./pages/AddAccount"
@@ -10,6 +11,7 @@ import Settings from "./pages/Settings"
 import Recovery from "./pages/Recovery"
 import Sidebar from "./components/Sidebar"
 import Login from "./components/Login"
+import { auth } from "./firebase/config"
 
 // Main App Component with Authentication
 function AppContent() {
@@ -36,7 +38,36 @@ function AppContent() {
     return () => {
       window.removeEventListener('unhandledrejection', handleUnhandledRejection);
     };
-  }, []);
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const currentUrl = window.location.href
+    if (isSignInWithEmailLink(auth, currentUrl)) {
+      let email = window.localStorage.getItem('emailForSignIn')
+      if (!email) {
+        email = window.prompt("Enter your email for confirmation") || ''
+      }
+
+      if (!email) {
+        alert("Email verification cancelled — email is required.")
+        return
+      }
+
+      signInWithEmailLink(auth, email, currentUrl)
+        .then(() => {
+          window.localStorage.removeItem('emailForSignIn')
+          alert("Email verified — scan fingerprint to complete.")
+        })
+        .catch((err) => {
+          console.error('Email verification failed:', err)
+          alert("Email verification failed: " + err.message)
+        })
+    }
+  }, [])
 
   useEffect(() => {
     // Load dark mode preference

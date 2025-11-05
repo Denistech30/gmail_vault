@@ -4,10 +4,12 @@ import { useState } from "react"
 import Button from "../components/Button"
 import { useAuth } from "../contexts/AuthContext"
 import { enrollFingerprint } from "../utils/webauthn"
-import { collection, addDoc } from "firebase/firestore"
+import { collection, addDoc, doc, setDoc } from "firebase/firestore"
 import { db } from "../firebase/config"
 import { splitIntoShards, encryptShard } from "../utils/shard"
 import { hashCredential } from "../utils/zkp"
+import { ensureMasterKey } from "../utils/masterKey"
+import bip39 from "bip39"
 import CryptoJS from "crypto-js"
 
 export default function Settings({ darkMode, toggleDarkMode }) {
@@ -58,7 +60,16 @@ export default function Settings({ darkMode, toggleDarkMode }) {
         shard: encryptShard(shard2, key),
         index: 1
       });
-      
+
+      const masterKey = ensureMasterKey();
+      const phrase = bip39.generateMnemonic();
+      alert("RECOVERY PHRASE:\n\n" + phrase + "\n\nWrite this down — use if email lost.");
+
+      const backupKey = CryptoJS.PBKDF2(phrase, user.uid, { keySize: 8, iterations: 1000 }).toString();
+      const encryptedMasterKey = CryptoJS.AES.encrypt(masterKey, backupKey).toString();
+
+      await setDoc(doc(db, "users", user.uid), { encryptedBackup: encryptedMasterKey }, { merge: true });
+
       setBiometricsEnabled(true);
       localStorage.setItem("biometricsEnabled", "true");
       

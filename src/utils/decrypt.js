@@ -1,9 +1,16 @@
-export async function decryptData(encryptedObj, userPassword) {
+import { getMasterKey } from './masterKey';
+
+export async function decryptData(encryptedObj) {
   const { encryptedData, iv, salt } = encryptedObj;
+  const masterKey = getMasterKey();
+  if (!masterKey) {
+    throw new Error('Master key is unavailable');
+  }
+
   const encoder = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
-    encoder.encode(userPassword),
+    encoder.encode(masterKey),
     { name: 'PBKDF2' },
     false,
     ['deriveKey']
