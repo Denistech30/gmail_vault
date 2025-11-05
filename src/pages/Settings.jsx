@@ -64,8 +64,9 @@ export default function Settings({ darkMode, toggleDarkMode }) {
       
       alert("Enrollment complete!\n\nFingerprint enrolled\nZKP hash saved\nShards saved to cloud");
     } catch (err) {
-      console.error("Enrollment error:", err);
-      alert("Enrollment failed: " + (err.message || "Unknown error") + "\n\nCheck console for details.");
+      console.error('Enrollment error:', err);
+      alert("Enrollment failed: " + err.message + "\n\n" +
+        "Tip: Ensure device has screen lock and biometrics enabled.");
     }
   };
 

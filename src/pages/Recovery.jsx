@@ -53,8 +53,9 @@ export default function Recovery() {
       setTimeout(() => navigate("/"), 1500);
     } catch (err) {
       setStatus("error");
-      alert("Recovery failed: " + (err.message || "Unknown error"));
       console.error('Recovery error:', err);
+      alert("Recovery failed: " + err.message + "\n\n" +
+        "Tip: Ensure device has screen lock and biometrics enabled.");
     }
   };
 

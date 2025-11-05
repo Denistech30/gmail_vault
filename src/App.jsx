@@ -83,7 +83,7 @@ function AppContent() {
 
   // Show main app if user is authenticated
   return (
-    <Router>
+    <Router future={{ v7_startTransition: true }}>
       <div className="flex min-h-screen bg-gray-50 dark:bg-gray-900">
         <Sidebar />
         <main className="flex-1 w-full min-h-screen md:ml-64 pb-16 md:pb-0">

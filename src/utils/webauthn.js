@@ -1,5 +1,3 @@
-import { startRegistration, startAuthentication } from '@simplewebauthn/browser';
-
 const bufferToBase64URL = (buffer) => {
   const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
   let binary = '';
@@ -38,57 +36,71 @@ export const ensurePlatformAuthenticatorAvailable = async () => {
 };
 
 export async function enrollFingerprint() {
+  // Check support
+  if (!window.PublicKeyCredential) {
+    throw new Error('WebAuthn not supported in this browser');
+  }
+  if (!window.isSecureContext) {
+    throw new Error('HTTPS required. Use Netlify URL, not localhost');
+  }
+
+  const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+  if (!available) {
+    throw new Error('No biometric sensor or not configured');
+  }
+
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  const userId = crypto.getRandomValues(new Uint8Array(16));
+
+  const publicKey = {
+    challenge,
+    rp: { name: 'Gmail Vault' },
+    user: {
+      id: userId,
+      name: 'user@gmail.com',
+      displayName: 'Gmail Vault User',
+    },
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+    authenticatorSelection: {
+      userVerification: 'preferred', // Relaxed for mobile
+    },
+    timeout: 60000,
+  };
+
   try {
-    await ensurePlatformAuthenticatorAvailable();
-
-    const challenge = randomBase64URL(32);
-    const userId = bufferToBase64URL(new TextEncoder().encode(crypto.randomUUID()));
-
-    const resp = await startRegistration({
-      rp: { name: 'Gmail Vault', id: window.location.hostname },
-      user: {
-        id: userId,
-        name: 'user@gmail.com',
-        displayName: 'Gmail Vault User',
-      },
-      challenge,
-      pubKeyCredParams: [
-        { type: 'public-key', alg: -7 }, // ES256
-        { type: 'public-key', alg: -257 }, // RS256
-      ],
-      authenticatorSelection: {
-        residentKey: 'required',
-        userVerification: 'required',
-        authenticatorAttachment: 'platform',
-      },
-      timeout: 60000,
-      attestation: 'none',
-    });
-
-    return resp;
+    const credential = await navigator.credentials.create({ publicKey });
+    return credential;
   } catch (err) {
     console.error('Enrollment failed:', err);
-    throw new Error('Biometrics not supported. Use HTTPS and a secure device.');
+    if (err.name === 'NotAllowedError') {
+      throw new Error('Permission denied or timeout. Try again or check device lock.');
+    }
+    throw new Error('Fingerprint enrollment failed. Try again.');
   }
 }
 
 export async function authenticateFingerprint() {
+  if (!window.PublicKeyCredential) throw new Error('WebAuthn not supported');
+  if (!window.isSecureContext) throw new Error('HTTPS required');
+
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+
+  const publicKey = {
+    challenge,
+    rpId: window.location.hostname,
+    allowCredentials: [],
+    userVerification: 'preferred', // Relaxed for mobile
+    timeout: 60000,
+  };
+
   try {
-    await ensurePlatformAuthenticatorAvailable();
-
-    const challenge = randomBase64URL(32);
-
-    const resp = await startAuthentication({
-      challenge,
-      rpId: window.location.hostname,
-      allowCredentials: [],
-      userVerification: 'required',
-      timeout: 60000,
-    });
-
-    return resp;
+    const assertion = await navigator.credentials.get({ publicKey });
+    return assertion;
   } catch (err) {
     console.error('Authentication failed:', err);
+    if (err.name === 'NotAllowedError') {
+      throw new Error('Permission denied or timeout. Try again or check device lock.');
+    }
     throw new Error('Fingerprint scan failed. Try again.');
   }
 }
