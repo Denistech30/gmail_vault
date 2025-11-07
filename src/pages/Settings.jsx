@@ -4,16 +4,19 @@ import { useState } from "react"
 import Button from "../components/Button"
 import { useAuth } from "../contexts/AuthContext"
 import { enrollFingerprint } from "../utils/webauthn"
-import { collection, addDoc, doc, setDoc } from "firebase/firestore"
+import { collection, addDoc, doc, setDoc, serverTimestamp, deleteDoc } from "firebase/firestore"
 import { db } from "../firebase/config"
 import { splitIntoShards, encryptShard } from "../utils/shard"
 import { hashCredential } from "../utils/zkp"
-import { ensureMasterKey } from "../utils/masterKey"
+import { generateMasterKey, encryptMasterKeyWithFingerprint } from "../lib/crypto"
+import { getLocalMasterKey, setLocalMasterKey } from "../utils/masterKeyStore"
 import bip39 from "bip39"
 import CryptoJS from "crypto-js"
+import { recoverWithFingerprint } from "../utils/fingerprintService"
 
 export default function Settings({ darkMode, toggleDarkMode }) {
   const [biometricsEnabled, setBiometricsEnabled] = useState(localStorage.getItem("biometricsEnabled") === "true")
+  const [biometricsToggleLoading, setBiometricsToggleLoading] = useState(false)
   const [showSuccess, setShowSuccess] = useState(false)
   
   // Firebase Auth state
@@ -24,12 +27,43 @@ export default function Settings({ darkMode, toggleDarkMode }) {
   const [authError, setAuthError] = useState('')
   const [authSuccess, setAuthSuccess] = useState('')
 
-  const handleBiometricsToggle = () => {
-    const newValue = !biometricsEnabled
-    setBiometricsEnabled(newValue)
-    localStorage.setItem("biometricsEnabled", newValue.toString())
-    setShowSuccess(true)
-    setTimeout(() => setShowSuccess(false), 3000)
+  const handleBiometricsToggle = async () => {
+    if (!user) {
+      alert("Please log in first to manage biometric settings");
+      return;
+    }
+
+    if (!biometricsEnabled) {
+      alert("Enroll your fingerprint before enabling biometric recovery.");
+      return;
+    }
+
+    try {
+      setBiometricsToggleLoading(true);
+      const { success, matched } = await recoverWithFingerprint();
+      if (!success || !matched) {
+        throw new Error("Fingerprint verification failed");
+      }
+
+      try {
+        await deleteDoc(doc(db, "users", user.uid, "backups", "masterKey"));
+      } catch (cleanupErr) {
+        console.warn("Failed to remove fingerprint backup during disable", cleanupErr);
+      }
+
+      setBiometricsEnabled(false);
+      localStorage.setItem("biometricsEnabled", "false");
+      localStorage.removeItem("fingerprintCred");
+      localStorage.removeItem("zkpPublicHash");
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
+      alert("Biometric recovery disabled. Re-enroll to enable again.");
+    } catch (err) {
+      console.error("Biometric disable verification failed", err);
+      alert("Unable to disable biometrics: " + (err.message || "Fingerprint verification required."));
+    } finally {
+      setBiometricsToggleLoading(false);
+    }
   }
 
   const handleEnroll = async () => {
@@ -61,7 +95,11 @@ export default function Settings({ darkMode, toggleDarkMode }) {
         index: 1
       });
 
-      const masterKey = ensureMasterKey();
+      let masterKey = getLocalMasterKey();
+      if (!masterKey) {
+        masterKey = generateMasterKey();
+        setLocalMasterKey(masterKey);
+      }
       const phrase = bip39.generateMnemonic();
       alert("RECOVERY PHRASE:\n\n" + phrase + "\n\nWrite this down — use if email lost.");
 
@@ -69,6 +107,14 @@ export default function Settings({ darkMode, toggleDarkMode }) {
       const encryptedMasterKey = CryptoJS.AES.encrypt(masterKey, backupKey).toString();
 
       await setDoc(doc(db, "users", user.uid), { encryptedBackup: encryptedMasterKey }, { merge: true });
+
+      const fingerprintBackup = await encryptMasterKeyWithFingerprint(masterKey, publicHash);
+      await setDoc(doc(db, "users", user.uid, "backups", "masterKey"), {
+        iv: fingerprintBackup.iv,
+        encryptedMasterKey: fingerprintBackup.encryptedMasterKey,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
 
       setBiometricsEnabled(true);
       localStorage.setItem("biometricsEnabled", "true");
@@ -298,6 +344,7 @@ export default function Settings({ darkMode, toggleDarkMode }) {
                   role="switch"
                   aria-checked={biometricsEnabled}
                   aria-label="Toggle biometric authentication"
+                  disabled={biometricsToggleLoading}
                   className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
                     biometricsEnabled ? 'bg-blue-600' : 'bg-gray-300'
                   }`}
@@ -308,6 +355,11 @@ export default function Settings({ darkMode, toggleDarkMode }) {
                     }`}
                   />
                 </button>
+                {!biometricsEnabled && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                    Enroll your fingerprint to enable biometric recovery.
+                  </p>
+                )}
               </div>
               
               {/* Enrollment Button */}

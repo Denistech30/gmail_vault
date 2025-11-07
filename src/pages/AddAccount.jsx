@@ -9,6 +9,13 @@ import notificationService from "../services/notificationService"
 import Input from "../components/Input"
 import Button from "../components/Button"
 import PopupAlert from "../components/PopupAlert"
+import {
+  generateMasterKey,
+  encryptData as encryptWithMasterKey,
+  hashSensitiveString,
+} from "../lib/crypto"
+import { getLocalMasterKey, setLocalMasterKey } from "../utils/masterKeyStore"
+import { cacheEncryptedAccounts } from "../utils/accountCache"
 
 export default function AddAccount() {
   const navigate = useNavigate()
@@ -32,60 +39,6 @@ export default function AddAccount() {
       ...formData,
       [e.target.name]: e.target.value,
     })
-  }
-
-  // Encryption functions using crypto.subtle AES-256
-  const generateEncryptionKey = async (userPassword) => {
-    const encoder = new TextEncoder()
-    const keyMaterial = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(userPassword || user?.uid || 'default-key'),
-      { name: 'PBKDF2' },
-      false,
-      ['deriveBits', 'deriveKey']
-    )
-    
-    const salt = crypto.getRandomValues(new Uint8Array(16))
-    const key = await crypto.subtle.deriveKey(
-      {
-        name: 'PBKDF2',
-        salt: salt,
-        iterations: 100000,
-        hash: 'SHA-256'
-      },
-      keyMaterial,
-      { name: 'AES-GCM', length: 256 },
-      true,
-      ['encrypt', 'decrypt']
-    )
-    
-    return { key, salt }
-  }
-
-  const encryptData = async (data, userPassword) => {
-    try {
-      const { key, salt } = await generateEncryptionKey(userPassword)
-      const encoder = new TextEncoder()
-      const iv = crypto.getRandomValues(new Uint8Array(12))
-      
-      const encrypted = await crypto.subtle.encrypt(
-        {
-          name: 'AES-GCM',
-          iv: iv
-        },
-        key,
-        encoder.encode(JSON.stringify(data))
-      )
-      
-      return {
-        encryptedData: Array.from(new Uint8Array(encrypted)),
-        iv: Array.from(iv),
-        salt: Array.from(salt)
-      }
-    } catch (error) {
-      console.error('Encryption error:', error)
-      throw new Error('Failed to encrypt data')
-    }
   }
 
   const generatePassword = () => {
@@ -124,41 +77,38 @@ export default function AddAccount() {
         email: formData.email,
         password: formData.password,
         notes: formData.notes,
-        category: formData.category
+        category: formData.category,
+        recoveryEmail: formData.recoveryEmail,
+        recoveryPhone: formData.recoveryPhone,
       }
       
-      // Encrypt sensitive data using user's password or user ID
-      const encryptedBlob = await encryptData(sensitiveData, user.uid)
-      
-      // 🔒 SECURITY AUDIT LOG
-      console.log('🔒 SECURITY AUDIT - ENCRYPTION CHECK:');
-      console.log('Original data length:', JSON.stringify(sensitiveData).length);
-      console.log('Encrypted blob:', {
-        encryptedDataLength: encryptedBlob.encryptedData.length,
-        ivLength: encryptedBlob.iv.length,
-        saltLength: encryptedBlob.salt.length,
-        sample: encryptedBlob.encryptedData.slice(0, 20) + '...'
-      });
-      console.log('✅ Plaintext NOT in encrypted blob:', 
-        !JSON.stringify(encryptedBlob).includes(formData.email) &&
-        !JSON.stringify(encryptedBlob).includes(formData.password)
-      );
-      
-      // Store for audit
-      localStorage.setItem('lastEncrypted', JSON.stringify(encryptedBlob));
+      let masterKey = getLocalMasterKey()
+      if (!masterKey) {
+        masterKey = generateMasterKey()
+        setLocalMasterKey(masterKey)
+      }
+
+      const encryptedPayload = await encryptWithMasterKey(masterKey, JSON.stringify(sensitiveData))
+
+      const hashedEmail = await hashSensitiveString(formData.email)
+      const hashedRecoveryEmail = await hashSensitiveString(formData.recoveryEmail)
+      const hashedRecoveryPhone = await hashSensitiveString(formData.recoveryPhone)
       
       // Prepare document for Firestore
       const accountDoc = {
         userId: user.uid,
-        recoveryEmail: formData.recoveryEmail,
-        recoveryPhone: formData.recoveryPhone,
-        encryptedData: encryptedBlob,
+        encryptedData: encryptedPayload,
+        hashedEmail,
+        hashedRecoveryEmail,
+        hashedRecoveryPhone,
         createdAt: new Date(),
         updatedAt: new Date()
       }
-      
+
       // Save to Firestore under users/{userId}/accounts
-      await addDoc(collection(db, "users", user.uid, "accounts"), accountDoc)
+      const docRef = await addDoc(collection(db, "users", user.uid, "accounts"), accountDoc)
+
+      await cacheEncryptedAccounts(user.uid, [{ id: docRef.id, ...accountDoc }])
       
       setPopupMessage("Account saved successfully! Your data has been encrypted and stored securely.")
       setPopupType("success")

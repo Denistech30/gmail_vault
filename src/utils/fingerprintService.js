@@ -5,11 +5,53 @@
  * compatible with zero-knowledge proof (ZKP) verification in the FMZR backend.
  */
 
-import "@/firebase/config"; // Ensures the shared Firebase app is initialized once
-import { startFingerprintEnrollment, verifyFingerprint } from "@/utils/webauthnClient";
-import { hashCredential } from "@/utils/cryptoUtils";
+import "../firebase/config"; // Ensures the shared Firebase app is initialized once
+import { startFingerprintEnrollment, verifyFingerprint } from "./webauthnClient";
+import { hashCredential } from "./zkp";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { getFirestore, doc, setDoc } from "firebase/firestore";
+
+function bufferToBase64Url(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  bytes.forEach((b) => {
+    binary += String.fromCharCode(b);
+  });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function serializeCredential(credential) {
+  if (!credential) return null;
+
+  const { response } = credential;
+  const serializedResponse = {};
+
+  if (response?.clientDataJSON) {
+    serializedResponse.clientDataJSON = bufferToBase64Url(response.clientDataJSON);
+  }
+  if (response?.attestationObject) {
+    serializedResponse.attestationObject = bufferToBase64Url(response.attestationObject);
+  }
+  if (response?.authenticatorData) {
+    serializedResponse.authenticatorData = bufferToBase64Url(response.authenticatorData);
+  }
+  if (response?.signature) {
+    serializedResponse.signature = bufferToBase64Url(response.signature);
+  }
+  if (response?.userHandle) {
+    serializedResponse.userHandle = bufferToBase64Url(response.userHandle);
+  }
+
+  return {
+    id: credential.id,
+    type: credential.type,
+    rawId: credential.rawId ? bufferToBase64Url(credential.rawId) : undefined,
+    response: serializedResponse,
+    clientExtensionResults: credential.getClientExtensionResults
+      ? credential.getClientExtensionResults()
+      : {},
+  };
+}
 
 /**
  * Enrolls the current user by generating a platform credential via WebAuthn,
@@ -22,20 +64,21 @@ import { getFirestore, doc, setDoc } from "firebase/firestore";
 export async function enrollUserFingerprint(userId) {
   try {
     const credential = await startFingerprintEnrollment();
-    const json = JSON.stringify(credential);
-    const hash = await hashCredential(json);
+    const serialized = serializeCredential(credential);
+    const hashField = await hashCredential(serialized);
+    const publicHash = hashField.toString();
 
     const functions = getFunctions();
     const registerFingerprint = httpsCallable(functions, "registerFingerprint");
-    const response = await registerFingerprint({ userId, publicHash: hash });
+    const response = await registerFingerprint({ userId, publicHash });
 
     const db = getFirestore();
     await setDoc(doc(db, "fingerprints", userId), {
-      publicHash: hash,
+      publicHash,
       updatedAt: Date.now(),
     });
 
-    return response.data;
+    return { ...response.data, publicHash };
   } catch (err) {
     console.error("❌ Fingerprint enrollment failed:", err);
     throw err;
@@ -52,14 +95,15 @@ export async function enrollUserFingerprint(userId) {
 export async function recoverWithFingerprint() {
   try {
     const assertion = await verifyFingerprint();
-    const json = JSON.stringify(assertion);
-    const hash = await hashCredential(json);
+    const serialized = serializeCredential(assertion);
+    const hashField = await hashCredential(serialized);
+    const publicHash = hashField.toString();
 
     const functions = getFunctions();
     const verifyFingerprintFn = httpsCallable(functions, "verifyFingerprint");
-    const response = await verifyFingerprintFn({ publicHash: hash });
+    const response = await verifyFingerprintFn({ publicHash });
 
-    return response.data;
+    return { ...response.data, publicHash, assertion: serialized };
   } catch (err) {
     console.error("❌ Fingerprint recovery failed:", err);
     throw err;

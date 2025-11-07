@@ -26,6 +26,23 @@ http://localhost:5001/<project-id>/us-central1/api/status
 
 Check the emulator logs for the exact host/port if unsure.
 
+### Testing callable WebAuthn helpers
+
+```js
+import { getFunctions, httpsCallable } from "firebase/functions";
+
+const functions = getFunctions();
+const register = httpsCallable(functions, "registerFingerprint");
+await register({ publicHash: "<hex-or-base64-hash>" });
+
+const verify = httpsCallable(functions, "verifyFingerprint");
+const result = await verify({ publicHash: "<hash-from-client>" });
+console.log(result.data); // { success: true, matched: true/false }
+```
+
+- Caller must be authenticated via Firebase Auth (email link, password, etc.).
+- Fingerprint hashes are stored under `users/{uid}/fingerprint` in Firestore.
+
 ## Deployment
 
 Once logged into Firebase and linked to a project:

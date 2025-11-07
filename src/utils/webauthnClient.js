@@ -4,6 +4,15 @@
  * forwarded to the FMZR backend for verification and secure storage.
  */
 
+export function isWebAuthnAvailable() {
+  return (
+    typeof window !== 'undefined' &&
+    window.isSecureContext &&
+    typeof window.PublicKeyCredential !== 'undefined' &&
+    typeof navigator?.credentials !== 'undefined'
+  );
+}
+
 /**
  * Initiates platform biometric enrollment using WebAuthn.
  * Generates a random challenge and user handle locally; the resulting
@@ -14,8 +23,8 @@
  * @throws {Error} if WebAuthn is unavailable or enrollment fails.
  */
 export async function startFingerprintEnrollment() {
-  if (typeof window === 'undefined' || !window.PublicKeyCredential) {
-    throw new Error('WebAuthn not supported on this browser');
+  if (!isWebAuthnAvailable()) {
+    throw new Error('WebAuthn not supported on this device or insecure context');
   }
 
   const publicKeyOptions = {
@@ -52,8 +61,8 @@ export async function startFingerprintEnrollment() {
  * @throws {Error} if the browser lacks WebAuthn support or verification fails.
  */
 export async function verifyFingerprint() {
-  if (typeof window === 'undefined' || !window.PublicKeyCredential) {
-    throw new Error('WebAuthn not supported');
+  if (!isWebAuthnAvailable()) {
+    throw new Error('WebAuthn not supported on this device or insecure context');
   }
 
   const assertionOptions = {
