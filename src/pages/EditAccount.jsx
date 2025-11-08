@@ -5,7 +5,8 @@ import { useNavigate, useParams } from "react-router-dom"
 import { doc, getDoc, updateDoc } from "firebase/firestore"
 import { db } from "../firebase/config"
 import { useAuth } from "../contexts/AuthContext"
-import { decryptData } from "../utils/decrypt"
+import { decryptData as decryptWithMasterKey, encryptData as encryptWithMasterKey, hashSensitiveString } from "../lib/crypto"
+import { getLocalMasterKey } from "../utils/masterKeyStore"
 import notificationService from "../services/notificationService"
 import Input from "../components/Input"
 import Button from "../components/Button"
@@ -41,13 +42,23 @@ export default function EditAccount() {
 
         if (docSnap.exists()) {
           const data = docSnap.data()
-          const decrypted = await decryptData(data.encryptedData, user.uid)
-          
+          const masterKey = getLocalMasterKey()
+          if (!masterKey) {
+            throw new Error("Missing local master key. Complete recovery or enrollment first.")
+          }
+
+          if (!data.encryptedData?.ciphertext || !data.encryptedData?.iv) {
+            throw new Error("Encrypted payload is incomplete")
+          }
+
+          const plaintext = await decryptWithMasterKey(masterKey, data.encryptedData)
+          const decrypted = JSON.parse(plaintext)
+
           setFormData({
             email: decrypted.email || "",
             password: decrypted.password || "",
-            recoveryEmail: data.recoveryEmail || "",
-            recoveryPhone: data.recoveryPhone || "",
+            recoveryEmail: decrypted.recoveryEmail || "",
+            recoveryPhone: decrypted.recoveryPhone || "",
             notes: decrypted.notes || "",
             category: decrypted.category || "general",
           })
@@ -76,60 +87,6 @@ export default function EditAccount() {
     })
   }
 
-  // Encryption functions
-  const generateEncryptionKey = async (userPassword) => {
-    const encoder = new TextEncoder()
-    const keyMaterial = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(userPassword),
-      { name: 'PBKDF2' },
-      false,
-      ['deriveBits', 'deriveKey']
-    )
-    
-    const salt = crypto.getRandomValues(new Uint8Array(16))
-    const key = await crypto.subtle.deriveKey(
-      {
-        name: 'PBKDF2',
-        salt: salt,
-        iterations: 100000,
-        hash: 'SHA-256'
-      },
-      keyMaterial,
-      { name: 'AES-GCM', length: 256 },
-      true,
-      ['encrypt', 'decrypt']
-    )
-    
-    return { key, salt }
-  }
-
-  const encryptData = async (data, userPassword) => {
-    try {
-      const { key, salt } = await generateEncryptionKey(userPassword)
-      const encoder = new TextEncoder()
-      const iv = crypto.getRandomValues(new Uint8Array(12))
-      
-      const encrypted = await crypto.subtle.encrypt(
-        {
-          name: 'AES-GCM',
-          iv: iv
-        },
-        key,
-        encoder.encode(JSON.stringify(data))
-      )
-      
-      return {
-        encryptedData: Array.from(new Uint8Array(encrypted)),
-        iv: Array.from(iv),
-        salt: Array.from(salt)
-      }
-    } catch (error) {
-      console.error('Encryption error:', error)
-      throw new Error('Failed to encrypt data')
-    }
-  }
-
   const generatePassword = () => {
     const length = 16
     const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
@@ -154,23 +111,33 @@ export default function EditAccount() {
     setLoading(true)
 
     try {
-      // Encrypt sensitive data
-      const dataToEncrypt = {
+      const masterKey = getLocalMasterKey()
+      if (!masterKey) {
+        throw new Error('Missing local master key. Complete recovery or enrollment first.')
+      }
+
+      const sensitiveData = {
         email: formData.email,
         password: formData.password,
         notes: formData.notes,
         category: formData.category,
+        recoveryEmail: formData.recoveryEmail,
+        recoveryPhone: formData.recoveryPhone,
       }
 
-      const encryptedData = await encryptData(dataToEncrypt, user.uid)
+      const encryptedData = await encryptWithMasterKey(masterKey, JSON.stringify(sensitiveData))
 
-      // Update in Firestore
+      const hashedEmail = await hashSensitiveString(formData.email)
+      const hashedRecoveryEmail = await hashSensitiveString(formData.recoveryEmail)
+      const hashedRecoveryPhone = await hashSensitiveString(formData.recoveryPhone)
+
       const docRef = doc(db, "users", user.uid, "accounts", id)
       await updateDoc(docRef, {
         encryptedData,
-        recoveryEmail: formData.recoveryEmail,
-        recoveryPhone: formData.recoveryPhone,
-        updatedAt: new Date().toISOString(),
+        hashedEmail,
+        hashedRecoveryEmail,
+        hashedRecoveryPhone,
+        updatedAt: new Date(),
       })
 
       setPopupMessage("Account updated successfully!")

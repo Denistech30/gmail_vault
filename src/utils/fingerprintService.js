@@ -6,10 +6,11 @@
  */
 
 import "../firebase/config"; // Ensures the shared Firebase app is initialized once
+import { getAuth } from "firebase/auth";
 import { startFingerprintEnrollment, verifyFingerprint } from "./webauthnClient";
 import { hashCredential } from "./zkp";
 import { getFunctions, httpsCallable } from "firebase/functions";
-import { getFirestore, doc, setDoc } from "firebase/firestore";
+import { getFirestore, doc, setDoc, getDoc } from "firebase/firestore";
 
 function bufferToBase64Url(buffer) {
   const bytes = new Uint8Array(buffer);
@@ -70,15 +71,21 @@ export async function enrollUserFingerprint(userId) {
 
     const functions = getFunctions();
     const registerFingerprint = httpsCallable(functions, "registerFingerprint");
-    const response = await registerFingerprint({ userId, publicHash });
+    let response;
+    try {
+      response = await registerFingerprint({ userId, publicHash });
+    } catch (fnErr) {
+      console.warn("registerFingerprint callable failed, falling back to client persistence", fnErr);
+      response = { data: { success: false, fallback: true } };
+    }
 
     const db = getFirestore();
-    await setDoc(doc(db, "fingerprints", userId), {
+    await setDoc(doc(db, "users", userId, "fingerprint", "primary"), {
       publicHash,
       updatedAt: Date.now(),
     });
 
-    return { ...response.data, publicHash };
+    return { ...response.data, publicHash, serializedCredential: serialized };
   } catch (err) {
     console.error("❌ Fingerprint enrollment failed:", err);
     throw err;
@@ -92,7 +99,7 @@ export async function enrollUserFingerprint(userId) {
  *
  * @returns {Promise<any>} Response payload from the `verifyFingerprint` Cloud Function.
  */
-export async function recoverWithFingerprint() {
+export async function recoverWithFingerprint(passedUserId) {
   try {
     const assertion = await verifyFingerprint();
     const serialized = serializeCredential(assertion);
@@ -101,9 +108,36 @@ export async function recoverWithFingerprint() {
 
     const functions = getFunctions();
     const verifyFingerprintFn = httpsCallable(functions, "verifyFingerprint");
-    const response = await verifyFingerprintFn({ publicHash });
+    let response;
+    try {
+      response = await verifyFingerprintFn({ publicHash });
+    } catch (fnErr) {
+      console.warn("verifyFingerprint callable failed, falling back to client verification", fnErr);
+      response = { data: { success: false, matched: false, fallback: true } };
+    }
 
-    return { ...response.data, publicHash, assertion: serialized };
+    let matched = Boolean(response?.data?.matched);
+    let success = Boolean(response?.data?.success !== false);
+
+    if (!matched) {
+      const auth = getAuth();
+      const userId = passedUserId || auth.currentUser?.uid;
+      if (userId) {
+        try {
+          const db = getFirestore();
+          const snapshot = await getDoc(doc(db, "users", userId, "fingerprint", "primary"));
+          if (snapshot.exists()) {
+            const storedHash = snapshot.get("publicHash");
+            matched = storedHash === publicHash;
+            success = success || matched;
+          }
+        } catch (fallbackErr) {
+          console.warn("Client fingerprint fallback failed", fallbackErr);
+        }
+      }
+    }
+
+    return { success, matched, publicHash, assertion: serialized };
   } catch (err) {
     console.error("❌ Fingerprint recovery failed:", err);
     throw err;

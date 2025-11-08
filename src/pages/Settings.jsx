@@ -3,16 +3,14 @@
 import { useState } from "react"
 import Button from "../components/Button"
 import { useAuth } from "../contexts/AuthContext"
-import { enrollFingerprint } from "../utils/webauthn"
 import { collection, addDoc, doc, setDoc, serverTimestamp, deleteDoc } from "firebase/firestore"
 import { db } from "../firebase/config"
 import { splitIntoShards, encryptShard } from "../utils/shard"
-import { hashCredential } from "../utils/zkp"
 import { generateMasterKey, encryptMasterKeyWithFingerprint } from "../lib/crypto"
 import { getLocalMasterKey, setLocalMasterKey } from "../utils/masterKeyStore"
 import bip39 from "bip39"
 import CryptoJS from "crypto-js"
-import { recoverWithFingerprint } from "../utils/fingerprintService"
+import { enrollUserFingerprint, recoverWithFingerprint } from "../utils/fingerprintService"
 
 export default function Settings({ darkMode, toggleDarkMode }) {
   const [biometricsEnabled, setBiometricsEnabled] = useState(localStorage.getItem("biometricsEnabled") === "true")
@@ -73,33 +71,47 @@ export default function Settings({ darkMode, toggleDarkMode }) {
     }
 
     try {
-      const cred = await enrollFingerprint();
-      localStorage.setItem("fingerprintCred", JSON.stringify(cred));
-      
-      const publicHashField = await hashCredential(cred);
-      const publicHash = publicHashField.toString();
-      localStorage.setItem("zkpPublicHash", publicHash);
-      
-      await addDoc(collection(db, "users", user.uid, "zkp"), { publicHash });
-      
-      const { shard1, shard2 } = splitIntoShards(cred);
-      const key = CryptoJS.lib.WordArray.random(32).toString();
-      localStorage.setItem("shardKey", key);
+      const enrollment = await enrollUserFingerprint(user.uid);
+      const { publicHash, serializedCredential } = enrollment || {};
 
-      await addDoc(collection(db, "users", user.uid, "shards"), {
-        shard: encryptShard(shard1, key),
-        index: 0
-      });
-      await addDoc(collection(db, "users", user.uid, "shards"), {
-        shard: encryptShard(shard2, key),
-        index: 1
-      });
+      if (!publicHash) {
+        throw new Error("Fingerprint enrollment did not return a verification hash.");
+      }
+
+      if (serializedCredential) {
+        localStorage.setItem("fingerprintCred", JSON.stringify(serializedCredential));
+
+        const { shard1, shard2 } = splitIntoShards(serializedCredential);
+        const key = CryptoJS.lib.WordArray.random(32).toString();
+        localStorage.setItem("shardKey", key);
+
+        await setDoc(doc(db, "users", user.uid, "shards", "0"), {
+          shard: encryptShard(shard1, key),
+          index: 0,
+          updatedAt: serverTimestamp(),
+        });
+
+        await setDoc(doc(db, "users", user.uid, "shards", "1"), {
+          shard: encryptShard(shard2, key),
+          index: 1,
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      localStorage.setItem("zkpPublicHash", publicHash);
+
+      await setDoc(
+        doc(db, "users", user.uid, "zkp", "primary"),
+        { publicHash, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
 
       let masterKey = getLocalMasterKey();
       if (!masterKey) {
         masterKey = generateMasterKey();
         setLocalMasterKey(masterKey);
       }
+
       const phrase = bip39.generateMnemonic();
       alert("RECOVERY PHRASE:\n\n" + phrase + "\n\nWrite this down — use if email lost.");
 
@@ -109,17 +121,21 @@ export default function Settings({ darkMode, toggleDarkMode }) {
       await setDoc(doc(db, "users", user.uid), { encryptedBackup: encryptedMasterKey }, { merge: true });
 
       const fingerprintBackup = await encryptMasterKeyWithFingerprint(masterKey, publicHash);
-      await setDoc(doc(db, "users", user.uid, "backups", "masterKey"), {
-        iv: fingerprintBackup.iv,
-        encryptedMasterKey: fingerprintBackup.encryptedMasterKey,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      await setDoc(
+        doc(db, "users", user.uid, "backups", "masterKey"),
+        {
+          iv: fingerprintBackup.iv,
+          encryptedMasterKey: fingerprintBackup.encryptedMasterKey,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
 
       setBiometricsEnabled(true);
       localStorage.setItem("biometricsEnabled", "true");
-      
-      alert("Enrollment complete!\n\nFingerprint enrolled\nZKP hash saved\nShards saved to cloud");
+
+      alert("Enrollment complete!\n\nFingerprint enrolled\nRecovery backups updated");
     } catch (err) {
       console.error('Enrollment error:', err);
       alert("Enrollment failed: " + err.message + "\n\n" +
