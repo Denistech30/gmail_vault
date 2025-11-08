@@ -7,7 +7,8 @@ import { db } from "../firebase/config"
 import { useAuth } from "../contexts/AuthContext"
 import { useOnlineStatus } from "../hooks/useOnlineStatus"
 import notificationService from "../services/notificationService"
-import { decryptData } from "../utils/decrypt"
+import { decryptData as decryptWithMasterKey } from "../lib/crypto"
+import { getLocalMasterKey } from "../utils/masterKeyStore"
 import { Search, Plus, Mail, Lock, Shield, Zap, TrendingUp, Eye, Copy, Trash2, Edit, MoreVertical, CheckCircle, AlertCircle, EyeOff } from 'lucide-react'
 
 export default function Dashboard() {
@@ -50,11 +51,21 @@ export default function Dashboard() {
       q,
       async (snapshot) => {
         try {
+          const masterKey = getLocalMasterKey()
+          if (!masterKey) {
+            throw new Error('Missing local master key. Complete recovery or enrollment first.');
+          }
+
           const decrypted = await Promise.all(
             snapshot.docs.map(async (docSnapshot) => {
               const data = docSnapshot.data()
               try {
-                const plain = await decryptData(data.encryptedData)
+                if (!data.encryptedData?.ciphertext || !data.encryptedData?.iv) {
+                  throw new Error('Encrypted payload is incomplete')
+                }
+
+                const plaintext = await decryptWithMasterKey(masterKey, data.encryptedData)
+                const plain = JSON.parse(plaintext)
                 
                 console.log('✅ Decrypted account:', {
                   id: docSnapshot.id,
